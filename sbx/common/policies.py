@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from gymnasium import spaces
+from sbx.common.jax_layers import BaseFeaturesExtractor
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.preprocessing import is_image_space, maybe_transpose
 from stable_baselines3.common.utils import is_vectorized_observation
@@ -15,7 +16,6 @@ class Flatten(nn.Module):
     """
     Equivalent to PyTorch nn.Flatten() layer.
     """
-
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         return x.reshape((x.shape[0], -1))
@@ -27,11 +27,15 @@ class BaseJaxPolicy(BasePolicy):
             *args,
             **kwargs,
         )
+    def make_features_extractor(self) -> BaseFeaturesExtractor:
+        """Helper method to create a features extractor."""
+        return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
 
     @staticmethod
     @jax.jit
-    def sample_action(actor_state, obervations, key):
-        dist = actor_state.apply_fn(actor_state.params, obervations)
+    def sample_action(actor_state, observations, key):
+        # breakpoint()
+        dist = actor_state.apply_fn(actor_state.params, observations)
         action = dist.sample(seed=key)
         return action
 
@@ -79,14 +83,15 @@ class BaseJaxPolicy(BasePolicy):
         if isinstance(observation, dict):
             assert isinstance(self.observation_space, spaces.Dict)
             # Minimal dict support: flatten
+
             keys = list(self.observation_space.keys())
             vectorized_env = is_vectorized_observation(observation[keys[0]], self.observation_space[keys[0]])
-
+            if isinstance(observation, dict):
+                observation = np.array([value.reshape(-1, *self.observation_space[key].shape) for key,value in observation.items()]).transpose(1,0,2,3,4)
+                # breakpoint()
             # Add batch dim and concatenate
-            observation = np.concatenate(
-                [observation[key].reshape(-1, *self.observation_space[key].shape) for key in keys],
-                axis=1,
-            )
+
+
             # need to copy the dict as the dict in VecFrameStack will become a torch tensor
             # observation = copy.deepcopy(observation)
             # for key, obs in observation.items():
