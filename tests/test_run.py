@@ -163,5 +163,4 @@ def test_dqn(tmp_path) -> None:
 def test_dict(replay_buffer_class: Optional[Type[HerReplayBuffer]]) -> None:
     env = BitFlippingEnv(n_bits=2, continuous=True)
     model = SAC("MultiInputPolicy", env, replay_buffer_class=replay_buffer_class)
-
     model.learn(200, progress_bar=True)
