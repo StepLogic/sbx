@@ -1,16 +1,14 @@
-from dataclasses import replace
-from typing import Any, Callable, Optional, Sequence, Tuple, Union, Dict, ClassVar
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
+import gymnasium as gym
 import jax
 import jax.numpy as jnp
-from flax.linen.module import Module, compact, merge_param
-
 from flax import linen as nn
+from flax.linen.module import Module, compact, merge_param
 from flax.linen.normalization import _canonicalize_axes, _compute_stats, _normalize
-from jax.nn import initializers
-import gymnasium as gym
 from gymnasium import spaces
-from stable_baselines3.common.preprocessing import is_image_space, get_flattened_obs_dim
+from jax.nn import initializers
+from stable_baselines3.common.preprocessing import is_image_space
 
 PRNGKey = Any
 Array = Any
@@ -240,9 +238,9 @@ class FlattenExtractor(BaseFeaturesExtractor):
 
     @compact
     def __call__(self, observations) -> jnp.array:
-        if not isinstance(observations, jnp.array):
+        if not isinstance(observations, jnp.ndarray):
             observations = jnp.array(observations)
-        return jax.lax.collapse(observations)
+        return jax.lax.collapse(observations, start_dimension=1)
 
 
 class NatureCNN(BaseFeaturesExtractor):
@@ -328,11 +326,10 @@ class CombinedExtractor(BaseFeaturesExtractor):
     def __call__(self, x):
 
         encoded_tensor_list = []
-        print("s", x.shape)
-        for ix in range(x.shape[1]):#access 1 ,key dimension
-            subspace=x[:,ix,...]
-            print("subspace", subspace.shape)
-            space=list(self.observation_space.values())[ix]
+        # print("s", x.shape)
+        for ix in range(x.shape[1]):  #access 1 ,key dimension
+            subspace = x[:, ix, ...]
+            space = list(self.observation_space.values())[ix]
             if is_image_space(space,
                               normalized_image=self.normalized_image):
 

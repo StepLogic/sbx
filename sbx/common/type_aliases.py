@@ -1,8 +1,8 @@
-from flax import core, struct
-from typing import Any, Callable, NamedTuple
+from typing import Callable, NamedTuple
 
 import flax
 import numpy as np
+from flax import struct
 from flax.training.train_state import TrainState
 
 

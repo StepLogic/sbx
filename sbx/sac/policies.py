@@ -5,13 +5,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from sbx.common.jax_layers import BaseFeaturesExtractor, FlattenExtractor, NatureCNN, CombinedExtractor
 import tensorflow_probability.substrates.jax as tfp
-from flax.training.train_state import TrainState
 from gymnasium import spaces
 from stable_baselines3.common.type_aliases import Schedule
 
 from sbx.common.distributions import TanhTransformedDistribution
+from sbx.common.jax_layers import BaseFeaturesExtractor, CombinedExtractor, FlattenExtractor, NatureCNN
 from sbx.common.policies import BaseJaxPolicy, Flatten, VectorCritic
 from sbx.common.type_aliases import ActorTrainState, RLTrainState
 
@@ -104,14 +103,14 @@ class SACPolicy(BaseJaxPolicy):
         self.reset_noise()
 
         if isinstance(self.observation_space, spaces.Dict):
-            obs = jnp.array([[value.sample()] for value in self.observation_space.values()]).transpose(1,0,2,3,4)
+            obs = jnp.array([[value.sample()] for value in self.observation_space.values()]).swapaxes(1, 0)
         else:
             obs = jnp.array([self.observation_space.sample()])
         action = jnp.array([self.action_space.sample()])
 
         self.feature_extractor = self.make_features_extractor()
         features, feature_params = self.feature_extractor.init_with_output(extractor_key, obs)
-        print("Feature",features.shape)
+        # print("Feature",features.shape)
         # features = self.feature_extractor.apply(feature_params, obs)
         self.actor = Actor(
             action_dim=int(np.prod(self.action_space.shape)),
@@ -122,7 +121,7 @@ class SACPolicy(BaseJaxPolicy):
         self.actor.reset_noise = self.reset_noise
 
         def actor_apply(actor_params, _obs):
-            print("ac",actor_params["extractor_params"])
+            print("ac", actor_params["extractor_params"])
             return self.actor.apply(actor_params["actor_params"],
                                     self.feature_extractor.apply(
                                         actor_params["extractor_params"],

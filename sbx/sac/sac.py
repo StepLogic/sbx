@@ -15,8 +15,8 @@ from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 
 from sbx.common.off_policy_algorithm import OffPolicyAlgorithmJax
-from sbx.common.type_aliases import ReplayBufferSamplesNp, RLTrainState, ActorTrainState
-from sbx.sac.policies import SACPolicy, CnnPolicy, MultiInputPolicy
+from sbx.common.type_aliases import ActorTrainState, ReplayBufferSamplesNp, RLTrainState
+from sbx.sac.policies import CnnPolicy, MultiInputPolicy, SACPolicy
 
 
 class EntropyCoef(nn.Module):
@@ -193,9 +193,9 @@ class SAC(OffPolicyAlgorithmJax):
         data = self.replay_buffer.sample(batch_size * gradient_steps, env=self._vec_normalize_env)
 
         if isinstance(data.observations, dict):
-            obs = jnp.array([value for value in data.observations.values()]).transpose((1,0,2,3,4))
+            obs = jnp.array([value for value in data.observations.values()]).swapaxes(1,0)
             # breakpoint()
-            next_obs = jnp.array([value for value in data.next_observations.values()]).transpose( (1,0,2,3,4))
+            next_obs = jnp.array([value for value in data.next_observations.values()]).swapaxes(1,0)
         else:
             obs = data.observations.numpy()
             next_obs = data.next_observations.numpy()
