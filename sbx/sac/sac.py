@@ -15,8 +15,8 @@ from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 
 from sbx.common.off_policy_algorithm import OffPolicyAlgorithmJax
-from sbx.common.type_aliases import ReplayBufferSamplesNp, RLTrainState
-from sbx.sac.policies import SACPolicy
+from sbx.common.type_aliases import ActorTrainState, ReplayBufferSamplesNp, RLTrainState
+from sbx.sac.policies import CnnPolicy, MultiInputPolicy, SACPolicy
 
 
 class EntropyCoef(nn.Module):
@@ -43,40 +43,41 @@ class SAC(OffPolicyAlgorithmJax):
     policy_aliases: ClassVar[Dict[str, Type[SACPolicy]]] = {  # type: ignore[assignment]
         "MlpPolicy": SACPolicy,
         # Minimal dict support using flatten()
-        "MultiInputPolicy": SACPolicy,
+        "CnnPolicy": CnnPolicy,
+        "MultiInputPolicy": MultiInputPolicy,
     }
 
     policy: SACPolicy
     action_space: spaces.Box  # type: ignore[assignment]
 
     def __init__(
-        self,
-        policy,
-        env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 3e-4,
-        qf_learning_rate: Optional[float] = None,
-        buffer_size: int = 1_000_000,  # 1e6
-        learning_starts: int = 100,
-        batch_size: int = 256,
-        tau: float = 0.005,
-        gamma: float = 0.99,
-        train_freq: Union[int, Tuple[int, str]] = 1,
-        gradient_steps: int = 1,
-        policy_delay: int = 1,
-        action_noise: Optional[ActionNoise] = None,
-        replay_buffer_class: Optional[Type[ReplayBuffer]] = None,
-        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
-        ent_coef: Union[str, float] = "auto",
-        target_entropy: Union[Literal["auto"], float] = "auto",
-        use_sde: bool = False,
-        sde_sample_freq: int = -1,
-        use_sde_at_warmup: bool = False,
-        tensorboard_log: Optional[str] = None,
-        policy_kwargs: Optional[Dict[str, Any]] = None,
-        verbose: int = 0,
-        seed: Optional[int] = None,
-        device: str = "auto",
-        _init_setup_model: bool = True,
+            self,
+            policy: Union[str, Type[SACPolicy]],
+            env: Union[GymEnv, str],
+            learning_rate: Union[float, Schedule] = 3e-4,
+            qf_learning_rate: Optional[float] = None,
+            buffer_size: int = 1_000_000,  # 1e6
+            learning_starts: int = 100,
+            batch_size: int = 256,
+            tau: float = 0.005,
+            gamma: float = 0.99,
+            train_freq: Union[int, Tuple[int, str]] = 1,
+            gradient_steps: int = 1,
+            policy_delay: int = 1,
+            action_noise: Optional[ActionNoise] = None,
+            replay_buffer_class: Optional[Type[ReplayBuffer]] = None,
+            replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
+            ent_coef: Union[str, float] = "auto",
+            target_entropy: Union[Literal["auto"], float] = "auto",
+            use_sde: bool = False,
+            sde_sample_freq: int = -1,
+            use_sde_at_warmup: bool = False,
+            tensorboard_log: Optional[str] = None,
+            policy_kwargs: Optional[Dict[str, Any]] = None,
+            verbose: int = 0,
+            seed: Optional[int] = None,
+            device: str = "auto",
+            _init_setup_model: bool = True,
     ) -> None:
         super().__init__(
             policy=policy,
@@ -169,13 +170,13 @@ class SAC(OffPolicyAlgorithmJax):
             self.target_entropy = float(self.target_entropy)
 
     def learn(
-        self,
-        total_timesteps: int,
-        callback: MaybeCallback = None,
-        log_interval: int = 4,
-        tb_log_name: str = "SAC",
-        reset_num_timesteps: bool = True,
-        progress_bar: bool = False,
+            self,
+            total_timesteps: int,
+            callback: MaybeCallback = None,
+            log_interval: int = 4,
+            tb_log_name: str = "SAC",
+            reset_num_timesteps: bool = True,
+            progress_bar: bool = False,
     ):
         return super().learn(
             total_timesteps=total_timesteps,
@@ -192,13 +193,13 @@ class SAC(OffPolicyAlgorithmJax):
         data = self.replay_buffer.sample(batch_size * gradient_steps, env=self._vec_normalize_env)
 
         if isinstance(data.observations, dict):
-            keys = list(self.observation_space.keys())  # type: ignore[attr-defined]
-            obs = np.concatenate([data.observations[key].numpy() for key in keys], axis=1)
-            next_obs = np.concatenate([data.next_observations[key].numpy() for key in keys], axis=1)
+            obs = jnp.array([value for value in data.observations.values()]).swapaxes(1,0)
+            # breakpoint()
+            next_obs = jnp.array([value for value in data.next_observations.values()]).swapaxes(1,0)
         else:
             obs = data.observations.numpy()
             next_obs = data.next_observations.numpy()
-
+        # breakpoint()
         # Convert to numpy
         data = ReplayBufferSamplesNp(  # type: ignore[assignment]
             obs,
@@ -236,16 +237,16 @@ class SAC(OffPolicyAlgorithmJax):
     @staticmethod
     @jax.jit
     def update_critic(
-        gamma: float,
-        actor_state: TrainState,
-        qf_state: RLTrainState,
-        ent_coef_state: TrainState,
-        observations: jax.Array,
-        actions: jax.Array,
-        next_observations: jax.Array,
-        rewards: jax.Array,
-        dones: jax.Array,
-        key: jax.Array,
+            gamma: float,
+            actor_state: ActorTrainState,
+            qf_state: RLTrainState,
+            ent_coef_state: TrainState,
+            observations: jax.Array,
+            actions: jax.Array,
+            next_observations: jax.Array,
+            rewards: jax.Array,
+            dones: jax.Array,
+            key: jax.Array,
     ):
         key, noise_key, dropout_key_target, dropout_key_current = jax.random.split(key, 4)
         # sample action from the actor
@@ -254,6 +255,9 @@ class SAC(OffPolicyAlgorithmJax):
         next_log_prob = dist.log_prob(next_state_actions)
 
         ent_coef_value = ent_coef_state.apply_fn({"params": ent_coef_state.params})
+        # breakpoint()
+        next_observations = actor_state.extractor_apply_fn(actor_state.params["extractor_params"], next_observations)
+        observations = actor_state.extractor_apply_fn(actor_state.params["extractor_params"], observations)
 
         qf_next_values = qf_state.apply_fn(
             qf_state.target_params,
@@ -266,6 +270,7 @@ class SAC(OffPolicyAlgorithmJax):
         # td error + entropy term
         next_q_values = next_q_values - ent_coef_value * next_log_prob.reshape(-1, 1)
         # shape is (batch_size, 1)
+
         target_q_values = rewards.reshape(-1, 1) + (1 - dones.reshape(-1, 1)) * gamma * next_q_values
 
         def mse_loss(params: flax.core.FrozenDict, dropout_key: jax.Array) -> jax.Array:
@@ -285,22 +290,23 @@ class SAC(OffPolicyAlgorithmJax):
     @staticmethod
     @jax.jit
     def update_actor(
-        actor_state: RLTrainState,
-        qf_state: RLTrainState,
-        ent_coef_state: TrainState,
-        observations: jax.Array,
-        key: jax.Array,
+            actor_state: RLTrainState,
+            qf_state: RLTrainState,
+            ent_coef_state: TrainState,
+            observations: jax.Array,
+            key: jax.Array,
     ):
         key, dropout_key, noise_key = jax.random.split(key, 3)
 
-        def actor_loss(params: flax.core.FrozenDict) -> Tuple[jax.Array, jax.Array]:
+        def actor_loss(params: flax.core.FrozenDict) -> Tuple[
+            jax.Array, jax.Array]:
             dist = actor_state.apply_fn(params, observations)
             actor_actions = dist.sample(seed=noise_key)
             log_prob = dist.log_prob(actor_actions).reshape(-1, 1)
-
+            _obs = actor_state.extractor_apply_fn(params["extractor_params"], observations)
             qf_pi = qf_state.apply_fn(
                 qf_state.params,
-                observations,
+                _obs,
                 actor_actions,
                 rngs={"dropout": dropout_key},
             )
@@ -318,7 +324,8 @@ class SAC(OffPolicyAlgorithmJax):
     @staticmethod
     @jax.jit
     def soft_update(tau: float, qf_state: RLTrainState) -> RLTrainState:
-        qf_state = qf_state.replace(target_params=optax.incremental_update(qf_state.params, qf_state.target_params, tau))
+        qf_state = qf_state.replace(
+            target_params=optax.incremental_update(qf_state.params, qf_state.target_params, tau))
         return qf_state
 
     @staticmethod
@@ -336,13 +343,13 @@ class SAC(OffPolicyAlgorithmJax):
 
     @classmethod
     def update_actor_and_temperature(
-        cls,
-        actor_state: RLTrainState,
-        qf_state: RLTrainState,
-        ent_coef_state: TrainState,
-        observations: jax.Array,
-        target_entropy: ArrayLike,
-        key: jax.Array,
+            cls,
+            actor_state: RLTrainState,
+            qf_state: RLTrainState,
+            ent_coef_state: TrainState,
+            observations: jax.Array,
+            target_entropy: ArrayLike,
+            key: jax.Array,
     ):
         (actor_state, qf_state, actor_loss_value, key, entropy) = cls.update_actor(
             actor_state,
@@ -357,18 +364,18 @@ class SAC(OffPolicyAlgorithmJax):
     @classmethod
     @partial(jax.jit, static_argnames=["cls", "gradient_steps", "policy_delay", "policy_delay_offset"])
     def _train(
-        cls,
-        gamma: float,
-        tau: float,
-        target_entropy: ArrayLike,
-        gradient_steps: int,
-        data: ReplayBufferSamplesNp,
-        policy_delay: int,
-        policy_delay_offset: int,
-        qf_state: RLTrainState,
-        actor_state: TrainState,
-        ent_coef_state: TrainState,
-        key: jax.Array,
+            cls,
+            gamma: float,
+            tau: float,
+            target_entropy: ArrayLike,
+            gradient_steps: int,
+            data: ReplayBufferSamplesNp,
+            policy_delay: int,
+            policy_delay_offset: int,
+            qf_state: RLTrainState,
+            actor_state: TrainState,
+            ent_coef_state: TrainState,
+            key: jax.Array,
     ):
         assert data.observations.shape[0] % gradient_steps == 0
         batch_size = data.observations.shape[0] // gradient_steps
@@ -393,6 +400,7 @@ class SAC(OffPolicyAlgorithmJax):
             ent_coef_state = carry["ent_coef_state"]
             key = carry["key"]
             info = carry["info"]
+            # breakpoint()
             batch_obs = jax.lax.dynamic_slice_in_dim(data.observations, i * batch_size, batch_size)
             batch_act = jax.lax.dynamic_slice_in_dim(data.actions, i * batch_size, batch_size)
             batch_next_obs = jax.lax.dynamic_slice_in_dim(data.next_observations, i * batch_size, batch_size)
@@ -446,5 +454,6 @@ class SAC(OffPolicyAlgorithmJax):
             update_carry["actor_state"],
             update_carry["ent_coef_state"],
             update_carry["key"],
-            (update_carry["info"]["actor_loss"], update_carry["info"]["qf_loss"], update_carry["info"]["ent_coef_loss"]),
+            (
+            update_carry["info"]["actor_loss"], update_carry["info"]["qf_loss"], update_carry["info"]["ent_coef_loss"]),
         )

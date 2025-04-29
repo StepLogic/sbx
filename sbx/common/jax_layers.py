@@ -1,10 +1,14 @@
 from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
+import gymnasium as gym
 import jax
 import jax.numpy as jnp
+from flax import linen as nn
 from flax.linen.module import Module, compact, merge_param
 from flax.linen.normalization import _canonicalize_axes, _compute_stats, _normalize
+from gymnasium import spaces
 from jax.nn import initializers
+from stable_baselines3.common.preprocessing import is_image_space
 
 PRNGKey = Any
 Array = Any
@@ -89,6 +93,7 @@ class BatchRenorm(Module):
     scale_init: Callable[[PRNGKey, Shape, Dtype], Array] = initializers.ones
     axis_name: Optional[str] = None
     axis_index_groups: Any = None
+
     # This parameter was added in flax.linen 0.7.2 (08/2023)
     # commented out to be compatible with a wider range of jax versions
     # TODO: re-activate in some months (04/2024)
@@ -176,7 +181,7 @@ class BatchRenorm(Module):
                 # ((x - x_mean) / sigma) * r + d = ((x - x_mean) * r + d * sigma) / sigma
                 # where sigma = sqrt(var)
                 affine_mean = batch_mean - d * jnp.sqrt(batch_var) / r
-                affine_var = batch_var / (r**2)
+                affine_var = batch_var / (r ** 2)
 
                 # Note: in the original paper, after some warmup phase (batch norm phase of 5k steps)
                 # the constraints are linearly relaxed to r_max/d_max over 40k steps
@@ -204,3 +209,133 @@ class BatchRenorm(Module):
             self.bias_init,
             self.scale_init,
         )
+
+
+class BaseFeaturesExtractor(Module):
+    """
+    Base class that represents a features extractor.
+
+    :param observation_space:
+    :param features_dim: Number of features extracted.
+    """
+    observation_space: gym.Space = None
+    features_dim: int = 0
+    normalized_image: bool = False
+    cnn_output_dim = 256
+    # def __init__(self, observation_space: gym.Space, features_dim: int = 0) -> None:
+    #     super().__init__()
+    #     assert features_dim > 0
+    #     self._observation_space = observation_space
+    #     self._features_dim = features_dim
+
+
+class FlattenExtractor(BaseFeaturesExtractor):
+    """
+    Feature extract that flatten the input.
+    Used as a placeholder when feature extraction is not needed.
+    :param observation_space:
+    """
+
+    @compact
+    def __call__(self, observations) -> jnp.array:
+        if not isinstance(observations, jnp.ndarray):
+            observations = jnp.array(observations)
+        return jax.lax.collapse(observations, start_dimension=1)
+
+
+class NatureCNN(BaseFeaturesExtractor):
+    """
+    CNN from DQN Nature paper:
+        Mnih, Volodymyr, et al.
+        "Human-level control through deep reinforcement learning."
+        Nature 518.7540 (2015): 529-533.
+    :param observation_space:
+    :param features_dim: Number of features extracted.
+        This corresponds to the number of unit for the last layer.
+    :param normalized_image: Whether to assume that the image is already normalized
+        or not (this disables dtype and bounds checks): when True, it only checks that
+        the space is a Box and has 3 dimensions.
+        Otherwise, it checks that it has expected dtype (uint8) and bounds (values in [0, 255]).
+    """
+    normalized_image: bool = False
+    features_dim: int = 256
+
+    def setup(self):
+        assert isinstance(self.observation_space, spaces.Box), (
+            "NatureCNN must be used with a gym.spaces.Box ",
+            f"observation space, not {self.observation_space}",
+        )
+
+        # We assume CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+        assert is_image_space(self.observation_space, check_channels=False, normalized_image=self.normalized_image), (
+            "You should use NatureCNN "
+            f"only with images not with {self.observation_space}\n"
+            "(you are probably using `CnnPolicy` instead of `MlpPolicy` or `MultiInputPolicy`)\n"
+            "If you are using a custom environment,\n"
+            "please check it using our env checker:\n"
+            "https://stable-baselines3.readthedocs.io/en/master/common/env_checker.html.\n"
+            "If you are using `VecNormalize` or already normalized channel-first images "
+            "you should pass `normalize_images=False`: \n"
+            "https://stable-baselines3.readthedocs.io/en/master/guide/custom_env.html"
+        )
+        self.n_input_channels = self.observation_space.shape[0]
+
+    @compact
+    # Provide a constructor to register a new parameter
+    # and return its initial value
+    def __call__(self, x):
+        x = nn.Conv(features=32, kernel_size=(3, 3), strides=(4, 4))(x)
+        x = nn.relu(x)
+        # print("x,",x.shape)
+        # x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(2, 2))(x)
+        x = nn.relu(x)
+        # x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1))(x)
+        x = nn.relu(x)
+        x = x.reshape((x.shape[0], -1))  # Flatten
+        x = nn.Dense(features=self.features_dim)(x)
+        x = nn.relu(x)
+        # x = nn.Dense(features=10)(x)  # There are 10 classes in MNIST
+        return x
+
+
+class CombinedExtractor(BaseFeaturesExtractor):
+    """
+    Combined features extractor for Dict observation spaces.
+    Builds a features extractor for each key of the space. Input from each space
+    is fed through a separate submodule (CNN or MLP, depending on input shape),
+    the output features are concatenated and fed through additional MLP network ("combined").
+
+    :param observation_space:
+    :param cnn_output_dim: Number of features to output from each CNN submodule(s). Defaults to
+        256 to avoid exploding network sizes.
+    :param normalized_image: Whether to assume that the image is already normalized
+        or not (this disables dtype and bounds checks): when True, it only checks that
+        the space is a Box and has 3 dimensions.
+        Otherwise, it checks that it has expected dtype (uint8) and bounds (values in [0, 255]).
+    """
+    normalized_image: bool = False
+    features_dim: int = 256
+    cnn_output_dim: int = 256
+
+    @compact
+    # Provide a constructor to register a new parameter
+    # and return its initial value
+    def __call__(self, x):
+
+        encoded_tensor_list = []
+        # print("s", x.shape)
+        for ix in range(x.shape[1]):  #access 1 ,key dimension
+            subspace = x[:, ix, ...]
+            space = list(self.observation_space.values())[ix]
+            if is_image_space(space,
+                              normalized_image=self.normalized_image):
+
+                subspace = NatureCNN(space, features_dim=self.cnn_output_dim,
+                                     normalized_image=self.normalized_image)(subspace)
+            else:
+                subspace = FlattenExtractor()(subspace)
+            encoded_tensor_list.append(subspace)
+        return jax.lax.concatenate(encoded_tensor_list, dimension=1)

@@ -294,10 +294,10 @@ class CrossQPolicy(BaseJaxPolicy):
 
     @staticmethod
     @jax.jit
-    def sample_action(actor_state, obervations, key):
+    def sample_action(actor_state, observations, key):
         dist = actor_state.apply_fn(
             {"params": actor_state.params, "batch_stats": actor_state.batch_stats},
-            obervations,
+            observations,
             train=False,
         )
         action = dist.sample(seed=key)
